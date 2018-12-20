@@ -83,7 +83,6 @@ defmodule Mix.Tasks.Appsignal.DiagnoseTest do
 
     assert report[:library] == %{
              agent_version: @agent_version,
-             agent_architecture: Appsignal.System.installed_agent_architecture(),
              extension_loaded: Appsignal.Nif.loaded?(),
              language: "elixir",
              package_version: @appsignal_version

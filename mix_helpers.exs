@@ -22,13 +22,16 @@ defmodule Mix.Appsignal.Helper do
       Mix.shell.info "AppSignal: Using local agent release."
       File.mkdir_p!(priv_dir())
       clean_up_extension_files()
+      # TODO: Add local source to report
       Enum.each(["appsignal.h", "appsignal-agent", "appsignal.version", "libappsignal.a"], fn(file) ->
         File.cp(project_ext_path(file), priv_path(file))
       end)
     else
       if has_files?() and has_correct_agent_version?() do
+        # TODO: Add what kind of remote to report?
         :ok
       else
+        # TODO: Add remote source to report
         if is_nil(arch_config) do
           raise Mix.Error, message: """
           No config found for architecture '#{arch}'.
@@ -42,11 +45,13 @@ defmodule Mix.Appsignal.Helper do
         clean_up_extension_files()
 
         try do
+          # TODO: add succes to report
           download_and_extract(arch_config[:download_url], version, arch_config[:checksum])
         catch
           {:checksum_mismatch, filename, _, _} ->
             File.rm!(filename)
             try do
+              # TODO: add succes to report
               download_and_extract(arch_config[:download_url], version, arch_config[:checksum])
             catch
               {:checksum_mismatch, filename, calculated, expected} ->
@@ -58,17 +63,6 @@ defmodule Mix.Appsignal.Helper do
             end
         end
       end
-    end
-  end
-
-  def store_architecture(arch) do
-    File.mkdir_p!(priv_dir())
-    case File.open priv_path("appsignal.architecture"), [:write] do
-      {:ok, file} ->
-        result = IO.binwrite(file, arch)
-        File.close(file)
-        result
-      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -186,8 +180,7 @@ defmodule Mix.Appsignal.Helper do
     end
   end
 
-
-  defp priv_path(filename) do
+  def priv_path(filename) do
     Path.join(priv_dir(), filename)
   end
 
@@ -240,6 +233,93 @@ defmodule Mix.Appsignal.Helper do
     end
   end
 
+  defp agent_platform_by_ldd_version do
+    case ldd_version_output() do
+      nil -> "linux"
+      output ->
+        case String.contains?(output, "musl") do
+          true -> "linux-musl"
+          false ->
+            ldd_version = extract_ldd_version(output)
+            case Version.compare("#{ldd_version}.0", "2.15.0") do
+              :lt -> "linux-musl"
+              _ -> "linux"
+            end
+        end
+    end
+  rescue
+    _ -> "linux"
+  end
+
+  # Fetches the libc version number from the `ldd` command
+  # If `ldd` is not found it returns `nil`
+  defp ldd_version_output do
+    {output, _} = System.cmd("ldd", ["--version"], stderr_to_stdout: true)
+    output
+  rescue
+    _ -> nil
+  end
+
+  defp extract_ldd_version(nil), do: nil
+
+  defp extract_ldd_version(ldd_output) do
+    List.first(Regex.run(~r/\d+\.\d+/, ldd_output))
+  end
+
+  def initial_report do
+    {_, os} = :os.type()
+    ldd_version_output = ldd_version_output()
+    dependencies =
+      case extract_ldd_version(ldd_version_output) do
+        nil ->
+          %{}
+        ldd_version ->
+          %{libc: ldd_version}
+      end
+    %{
+      language: %{
+        name: "elixir",
+        version: System.version(),
+        otp_version: System.otp_release()
+      },
+      build: %{
+        package_path: priv_dir(),
+        architecture: nil,
+        library_type: "static",
+        target: os,
+        checksum: "unverified",
+        musl_override: force_musl_build?()
+        # TODO: Track flags in Makefile, send them from this file like CFLAGS_ADD?
+      },
+      installation: %{
+        status: "incomplete"
+      },
+      host: %{
+        root_user: Appsignal.System.root?,
+        time: DateTime.to_iso8601(DateTime.utc_now()),
+        dependencies: dependencies
+      }
+    }
+  end
+
+  def write_report(report) do
+    case Poison.encode(report) do
+      {:ok, body} ->
+        File.mkdir_p!(priv_dir())
+        case File.open priv_path("appsignal.report"), [:write] do
+          {:ok, file} ->
+            result = IO.binwrite(file, body)
+            File.close(file)
+            result
+          {:error, reason} ->
+            Mix.Shell.IO.error "Error: Could not write AppSignal installation report.\n#{reason}"
+            {:error, reason}
+        end
+      {:error, error} ->
+        Mix.Shell.IO.error "Error: Could not encode AppSignal installation report.\n#{error}"
+    end
+  end
+
   def priv_dir() do
     case :code.priv_dir(:appsignal) do
       {:error, :bad_name} ->
@@ -252,23 +332,6 @@ defmodule Mix.Appsignal.Helper do
       path ->
         path
         |> List.to_string
-    end
-  end
-
-  defp agent_platform_by_ldd_version do
-    try do
-      {output, _} = System.cmd("ldd", ["--version"], stderr_to_stdout: true)
-      case String.contains?(output, "musl") do
-        true -> "linux-musl"
-        false ->
-          ldd_version = List.first(Regex.run(~r/\d+\.\d+/, output))
-          case Version.compare("#{ldd_version}.0", "2.15.0") do
-            :lt -> "linux-musl"
-            _ -> "linux"
-          end
-      end
-    rescue
-      _ -> "linux"
     end
   end
 
