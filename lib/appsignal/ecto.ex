@@ -11,6 +11,18 @@ defmodule Appsignal.Ecto do
 
   On Ecto 3, attach Appsignal.Ecto to Telemetry query events in your
   application's start/2 function:
+  
+  ```
+  :telemetry.attach(
+    "appsignal-ecto",
+    [:my_app, :repo, :query],
+    &Appsignal.Ecto.handle_event/4,
+    :handle_event,
+    nil
+  )
+  ```
+  
+  For versions of Telemetry < 0.3.0, you'll need to call it slightly differently:
 
   ```
   Telemetry.attach(
